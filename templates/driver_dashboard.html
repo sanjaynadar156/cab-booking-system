@@ -1,0 +1,205 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driver Dashboard - Cab Booking System</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f9;
+            margin: 0;
+            padding: 30px 15px;
+        }
+
+        .container {
+            max-width: 500px;
+            margin: 30px auto;
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        h2, h3 {
+            color: #222;
+        }
+
+        .status-box {
+            background: #f1f5f9;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        #status {
+            font-weight: bold;
+            margin-bottom: 0;
+        }
+
+        #error {
+            color: #c62828;
+            overflow-wrap: anywhere;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+        }
+
+        #locationButton {
+            background: #16803c;
+            color: white;
+        }
+
+        #locationButton:disabled {
+            background: #888;
+            cursor: wait;
+        }
+
+        .logout-button {
+            background: #c62828;
+            color: white;
+        }
+
+        .note {
+            color: #555;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h2>Driver Dashboard</h2>
+
+        <p>Welcome, {{ driver_name }}!</p>
+
+        <h3>Your Cab Status</h3>
+
+        <div class="status-box">
+            <p id="status" aria-live="polite">
+                Location not shared yet.
+            </p>
+        </div>
+
+        <button
+            id="locationButton"
+            type="button"
+            onclick="shareLocation()">
+            Share My Current Location
+        </button>
+
+        <p id="error" role="alert"></p>
+
+        <p class="note">
+            Allow location access when your browser asks for permission.
+            Your cab will be marked available after a successful GPS update.
+        </p>
+
+        <form method="POST" action="/driver/logout">
+            <button class="logout-button" type="submit">
+                Logout
+            </button>
+        </form>
+    </div>
+
+    <script>
+        async function shareLocation() {
+            const status = document.getElementById("status");
+            const error = document.getElementById("error");
+            const button = document.getElementById("locationButton");
+
+            error.textContent = "";
+
+            if (!navigator.geolocation) {
+                status.textContent = "GPS is not supported.";
+                error.textContent =
+                    "Please open this page in a browser that supports geolocation.";
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = "Getting Location...";
+            status.textContent = "Requesting your current location...";
+
+            navigator.geolocation.getCurrentPosition(
+                async function(position) {
+                    try {
+                        status.textContent = "Sending GPS location to server...";
+
+                        const response = await fetch(
+                            "/api/driver/location",
+                            {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/json"
+                                },
+                                body: JSON.stringify({
+                                    latitude: position.coords.latitude,
+                                    longitude: position.coords.longitude
+                                })
+                            }
+                        );
+
+                        const result = await response.json();
+
+                        if (!response.ok) {
+                            throw new Error(
+                                result.error || "GPS update failed."
+                            );
+                        }
+
+                        status.textContent =
+                            result.message ||
+                            "GPS location updated successfully.";
+
+                    } catch (err) {
+                        status.textContent = "Location update failed.";
+                        error.textContent =
+                            err.message || "Could not contact the server.";
+                    } finally {
+                        button.disabled = false;
+                        button.textContent = "Share My Current Location";
+                    }
+                },
+
+                function(positionError) {
+                    status.textContent = "Location not updated.";
+
+                    if (positionError.code === 1) {
+                        error.textContent =
+                            "Location permission denied. Allow location access in browser settings.";
+                    } else if (positionError.code === 2) {
+                        error.textContent =
+                            "Your current location is unavailable. Check your device location settings.";
+                    } else if (positionError.code === 3) {
+                        error.textContent =
+                            "Location request timed out. Please try again.";
+                    } else {
+                        error.textContent =
+                            "Could not get your location. Please try again.";
+                    }
+
+                    button.disabled = false;
+                    button.textContent = "Share My Current Location";
+                },
+
+                {
+                    enableHighAccuracy: true,
+                    timeout: 20000,
+                    maximumAge: 0
+                }
+            );
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Driver Registration</title>
+</head>
+<body>
+    <h2>Driver Registration</h2>
+
+    <form method="POST" action="/driver/register">
+        <label>Name:</label>
+        <input type="text" name="name" required>
+        <br><br>
+
+        <label>Email:</label>
+        <input type="email" name="email" required>
+        <br><br>
+
+        <label>Password:</label>
+        <input type="password" name="password" minlength="8" required>
+        <br><br>
+
+        <button type="submit">Register as Driver</button>
+    </form>
+
+    <p><a href="/driver/login">Already registered? Login</a></p>
+</body>
+</html>

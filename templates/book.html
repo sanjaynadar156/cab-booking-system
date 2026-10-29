@@ -1,0 +1,513 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book a Cab | CabGo</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+    <style>
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #101010;
+            color: white;
+        }
+
+        nav {
+            background: #181818;
+            padding: 20px 8%;
+            border-bottom: 2px solid #ffd400;
+        }
+
+        nav h2 { margin: 0; color: #ffd400; }
+
+        .container {
+            max-width: 550px;
+            margin: 40px auto;
+            padding: 30px;
+            background: #1c1c1c;
+            border-radius: 12px;
+            border: 1px solid #333;
+        }
+
+        h1 { color: #ffd400; text-align: center; }
+        p { color: #bbb; text-align: center; }
+
+        label {
+            display: block;
+            margin-top: 18px;
+            margin-bottom: 8px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 13px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #292929;
+            color: white;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 15px;
+            padding: 14px;
+            border: none;
+            border-radius: 6px;
+            background: #ffd400;
+            color: #111;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:hover { background: #e6bf00; }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .back {
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+            color: #ffd400;
+            text-decoration: none;
+        }
+
+        .messages, #location-message, #driver-message,
+        #distance-message, #fare-message {
+            color: #ffd400;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        #cab-map {
+            height: 350px;
+            width: 100%;
+            margin: 15px 0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .fare-card {
+            margin-top: 15px;
+            padding: 18px;
+            background: #292929;
+            border: 1px solid #ffd400;
+            border-radius: 8px;
+        }
+
+        .fare-amount {
+            color: #ffd400;
+            font-size: 28px;
+            font-weight: bold;
+            margin: 8px 0;
+        }
+    </style>
+</head>
+
+<body>
+<nav>
+    <h2>CabGo</h2>
+</nav>
+
+<div class="container">
+    <h1>Book Your Cab</h1>
+    <p>Enter your trip details below.</p>
+
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <div class="messages">
+                {% for message in messages %}
+                    <p>{{ message }}</p>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    <form action="/book" method="POST" id="booking-form">
+        <label for="pickup">Pickup Location</label>
+        <input type="text" id="pickup" name="pickup"
+               placeholder="e.g. Virar Railway Station" required>
+
+        <button type="button" id="find-location">
+            Use My Current Location
+        </button>
+
+        <p id="location-message">
+            Enter a pickup address or use your current location.
+        </p>
+
+        <label for="destination">Drop Location</label>
+        <input type="text" id="destination" name="destination"
+               placeholder="e.g. Borivali Railway Station" required>
+
+        <label for="cab-map">Map — Available Cabs and Route</label>
+        <div id="cab-map"></div>
+
+        <p id="driver-message" aria-live="polite">
+            Checking available cabs...
+        </p>
+
+        <label for="distance">Distance (in kilometres)</label>
+        <input type="number" id="distance" name="distance"
+               placeholder="Calculated automatically"
+               min="0.1" max="5000" step="0.1" required readonly>
+
+        <p id="distance-message" aria-live="polite">
+            Enter pickup and drop locations to calculate distance.
+        </p>
+
+        <label for="cab_type">Select Cab Type</label>
+        <select id="cab_type" name="cab_type" required>
+            <option value="Mini">Mini</option>
+            <option value="Sedan">Sedan</option>
+            <option value="SUV">SUV</option>
+        </select>
+
+        <div class="fare-card">
+            <label for="estimated-fare">Estimated Fare</label>
+            <div class="fare-amount" id="estimated-fare">₹0.00</div>
+            <p id="fare-message" aria-live="polite">
+                Calculate your route to see the fare.
+            </p>
+        </div>
+
+        <button type="submit" id="confirm-booking" disabled>
+            Confirm Booking
+        </button>
+    </form>
+
+    <a class="back" href="/dashboard">Back to Dashboard</a>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+    const defaultLocation = [19.455, 72.811];
+
+    const map = L.map("cab-map").setView(defaultLocation, 12);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    const pickupMarker = L.marker(defaultLocation)
+        .addTo(map)
+        .bindPopup("Pickup location");
+
+    let dropMarker = null;
+    let routeLayer = null;
+    let pickupCoordinates = null;
+    let dropCoordinates = null;
+    let calculationNumber = 0;
+
+    const driverMarkers = new Map();
+
+    const pickupInput = document.getElementById("pickup");
+    const destinationInput = document.getElementById("destination");
+    const distanceInput = document.getElementById("distance");
+    const cabTypeInput = document.getElementById("cab_type");
+
+    const distanceMessage = document.getElementById("distance-message");
+    const locationMessage = document.getElementById("location-message");
+    const driverMessage = document.getElementById("driver-message");
+    const fareMessage = document.getElementById("fare-message");
+    const fareDisplay = document.getElementById("estimated-fare");
+    const confirmButton = document.getElementById("confirm-booking");
+
+    const rates = {
+        Mini: 12,
+        Sedan: 16,
+        SUV: 22
+    };
+
+    const baseFares = {
+        Mini: 50,
+        Sedan: 80,
+        SUV: 120
+    };
+
+    function clearFare() {
+        fareDisplay.textContent = "₹0.00";
+        fareMessage.textContent = "Waiting for a valid route.";
+    }
+
+    function updateFare() {
+        const distance = Number(distanceInput.value);
+        const cabType = cabTypeInput.value;
+
+        if (!distance || distance <= 0 || !rates[cabType]) {
+            clearFare();
+            return;
+        }
+
+        const fare = baseFares[cabType] + distance * rates[cabType];
+
+        fareDisplay.textContent = "₹" + fare.toFixed(2);
+        fareMessage.textContent =
+            "₹" + baseFares[cabType] + " base fare + ₹"
+            + rates[cabType] + "/km × " + distance.toFixed(1) + " km";
+    }
+
+    async function geocodeAddress(address) {
+        const url =
+            "https://nominatim.openstreetmap.org/search?format=json&limit=1&q="
+            + encodeURIComponent(address);
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error("Address search service is unavailable. Try again.");
+        }
+
+        const results = await response.json();
+
+        if (!results.length) {
+            throw new Error(
+                "Location not found. Enter a more specific address."
+            );
+        }
+
+        return [Number(results[0].lat), Number(results[0].lon)];
+    }
+
+    async function getRoadDistance(start, end) {
+        const url =
+            "https://router.project-osrm.org/route/v1/driving/"
+            + start[1] + "," + start[0] + ";"
+            + end[1] + "," + end[0]
+            + "?overview=full&geometries=geojson";
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error("Route service is unavailable. Please try again.");
+        }
+
+        const result = await response.json();
+
+        if (result.code !== "Ok" || !result.routes.length) {
+            throw new Error("No driving route found for these locations.");
+        }
+
+        return {
+            kilometres: result.routes[0].distance / 1000,
+            geometry: result.routes[0].geometry
+        };
+    }
+
+    async function calculateDistance() {
+        const currentCalculation = ++calculationNumber;
+        const pickupText = pickupInput.value.trim();
+        const destinationText = destinationInput.value.trim();
+
+        distanceInput.value = "";
+        confirmButton.disabled = true;
+        confirmButton.style.opacity = "0.6";
+        clearFare();
+
+        if (!pickupText || !destinationText) {
+            distanceMessage.textContent =
+                "Enter both pickup and drop locations.";
+            return;
+        }
+
+        if (pickupText.toLowerCase() === destinationText.toLowerCase()) {
+            distanceMessage.textContent =
+                "Pickup and drop locations must be different.";
+            return;
+        }
+
+        distanceMessage.textContent =
+            "Finding locations and calculating road distance...";
+
+        try {
+            const start = pickupCoordinates ||
+                await geocodeAddress(pickupText);
+
+            if (currentCalculation !== calculationNumber) return;
+
+            const end = dropCoordinates ||
+                await geocodeAddress(destinationText);
+
+            if (currentCalculation !== calculationNumber) return;
+
+            const route = await getRoadDistance(start, end);
+
+            if (currentCalculation !== calculationNumber) return;
+
+            if (route.kilometres <= 0 || route.kilometres > 5000) {
+                throw new Error("Route distance is outside the allowed range.");
+            }
+
+            pickupCoordinates = start;
+            dropCoordinates = end;
+
+            distanceInput.value = route.kilometres.toFixed(1);
+
+            pickupMarker.setLatLng(start).bindPopup("Pickup Location");
+
+            if (dropMarker) map.removeLayer(dropMarker);
+
+            dropMarker = L.marker(end)
+                .addTo(map)
+                .bindPopup("Drop Location");
+
+            if (routeLayer) map.removeLayer(routeLayer);
+
+            routeLayer = L.geoJSON(route.geometry, {
+                style: { color: "#ffd400", weight: 5 }
+            }).addTo(map);
+
+            map.fitBounds(routeLayer.getBounds(), {
+                padding: [25, 25]
+            });
+
+            distanceMessage.textContent =
+                "Road distance: " + route.kilometres.toFixed(1) + " km.";
+
+            updateFare();
+
+            confirmButton.disabled = false;
+            confirmButton.style.opacity = "1";
+
+        } catch (error) {
+            if (currentCalculation !== calculationNumber) return;
+
+            distanceInput.value = "";
+            distanceMessage.textContent = error.message ||
+                "Could not calculate distance. Check your internet and locations.";
+
+            clearFare();
+        }
+    }
+
+    pickupInput.addEventListener("change", function () {
+        pickupCoordinates = null;
+        calculateDistance();
+    });
+
+    destinationInput.addEventListener("change", function () {
+        dropCoordinates = null;
+        calculateDistance();
+    });
+
+    cabTypeInput.addEventListener("change", updateFare);
+
+    document.getElementById("find-location")
+        .addEventListener("click", function () {
+            if (!navigator.geolocation) {
+                locationMessage.textContent =
+                    "Your browser does not support GPS location.";
+                return;
+            }
+
+            locationMessage.textContent = "Getting your current location...";
+
+            navigator.geolocation.getCurrentPosition(
+                function (position) {
+                    pickupCoordinates = [
+                        position.coords.latitude,
+                        position.coords.longitude
+                    ];
+
+                    pickupInput.value =
+                        pickupCoordinates[0].toFixed(6) + ", "
+                        + pickupCoordinates[1].toFixed(6);
+
+                    map.setView(pickupCoordinates, 15);
+
+                    pickupMarker.setLatLng(pickupCoordinates)
+                        .bindPopup("Your current location")
+                        .openPopup();
+
+                    locationMessage.textContent =
+                        "Current location selected. Calculating route...";
+
+                    calculateDistance();
+                },
+                function (error) {
+                    locationMessage.textContent =
+                        error.code === 1
+                        ? "Location permission denied. Allow GPS access."
+                        : "Location unavailable. Enter pickup manually.";
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 0
+                }
+            );
+        });
+
+    async function loadAvailableDrivers() {
+        try {
+            const response = await fetch("/api/available-drivers", {
+                cache: "no-store"
+            });
+
+            if (!response.ok) {
+                throw new Error("Could not load available cabs.");
+            }
+
+            const result = await response.json();
+            const drivers = result.drivers || [];
+            const currentIds = new Set();
+
+            drivers.forEach(function (driver) {
+                const lat = Number(driver.latitude);
+                const lon = Number(driver.longitude);
+
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+                currentIds.add(driver.id);
+
+                if (driverMarkers.has(driver.id)) {
+                    driverMarkers.get(driver.id).setLatLng([lat, lon]);
+                } else {
+                    const marker = L.marker([lat, lon]).addTo(map);
+                    marker.bindPopup("Available Cab: " + driver.name);
+                    driverMarkers.set(driver.id, marker);
+                }
+            });
+
+            driverMarkers.forEach(function (marker, id) {
+                if (!currentIds.has(id)) {
+                    map.removeLayer(marker);
+                    driverMarkers.delete(id);
+                }
+            });
+
+            driverMessage.textContent = drivers.length
+                + " available cab(s) found. Map refreshes every 10 seconds.";
+
+        } catch (error) {
+            driverMessage.textContent =
+                "Unable to load cabs. Check your connection and refresh the page.";
+        }
+    }
+
+    document.getElementById("booking-form")
+        .addEventListener("submit", function (event) {
+            if (!distanceInput.value ||
+                Number(distanceInput.value) <= 0 ||
+                confirmButton.disabled) {
+                event.preventDefault();
+                distanceMessage.textContent =
+                    "Please wait for a valid route and fare before booking.";
+            }
+        });
+
+    loadAvailableDrivers();
+    setInterval(loadAvailableDrivers, 10000);
+</script>
+</body>
+</html>
